@@ -1,6 +1,10 @@
+import copy
 from enum import Enum, auto
+import math
+from typing import List
 import enchant
 import numpy as np
+from functools import lru_cache
 
 class Direction(Enum):
     Down = auto()
@@ -14,63 +18,53 @@ class Scrabble:
 
     def __init__(self):
         self.matrix = np.array([[None for x in range(self.DIMENSION)] for y in range(self.DIMENSION)])
+        # matrix[x][y]
+        #   x↑ = right
+        #   y↑ = down
 
     def suggest_positions(self, word):
         word_size = len(word)
-        word_endings_pos = []
-        word_beginings_pos = []
+        candidate_positions = []
 
         for i, letter in enumerate(word):
-            print("LETTER", i, letter)
             positions = list(zip(*np.where(self.matrix == letter)))
-            for row, col in positions:
-                print(row, col)
+
+            for col, row in positions:
                 writeable = True
 
-                # Determine if we have enough space to write the word horizontally
-                if i <= row and row + word_size - i < self.DIMENSIONS:
-                    print("Writing horizontally")
-                    print("Before i")
+                # Determine if we have enough space to write the word vertically
+                if i <= row and row + word_size - i < self.DIMENSION:
                     for j in range(1, i + 1):
-                        char = self.matrix[row - j][col]
-                        if char != None or char != word[i - j]:
-                            print("Aborting")
+                        char = self.matrix[col][row - j]
+                        if (char is not None) and char != word[i - j]:
                             writeable = False
                             break
-                    print("After i")
                     for j in range(1, word_size - i):
-                        print(row + j, col)
-                        char = self.matrix[row + j][col]
-                        if char != None or char != word[i + j]:
-                            print("Aborting")
+                        char = self.matrix[col][row + j]
+                        if (char is not None) and char != word[i + j]:
                             writeable = False
                             break
                     if writeable:
-                        return ([row, col, Direction.Down])
-                # Attempt to write vertically
-                if i <= column and row + word_size - i < self.DIMENSIONS:
-                    print("Writing vertically")
-                    print("Before i")
+                        candidate_positions.append((col, row - i, Direction.Down))
+                writeable = True
+                # Attempt to write horizontally
+                if i <= col and row + word_size - i < self.DIMENSION:
                     for j in range(1, i + 1):
-                        char = self.matrix[row][col - j]
-                        print(row, col-j)
-                        if char != None or char != word[i - j]:
-                            print("Aborting")
+                        char = self.matrix[col - j][row]
+                        if (char is not None) and char != word[i - j]:
                             writeable = False
                             break
-                    print("After i")
                     for j in range(1, word_size - i):
-                        print(row, col+j)
-                        char = self.matrix[row][col+j]
-                        if char != None or char != word[i + j]:
-                            print("Aborting")
+                        char = self.matrix[col+j][row]
+                        if (char is not None) and char != word[i + j]:
                             writeable = False
                             break
                     if writeable:
-                        return ([row, col, Direction.Right])
-        return
+                        candidate_positions.append((col - i, row, Direction.Right))
+        return set(candidate_positions)
 
     def put(self, word, location, direction):
+        word = word.lower()
         for idx, c in enumerate(word):
             x = location[0]
             y = location[1]
@@ -79,6 +73,98 @@ class Scrabble:
             elif direction == Direction.Right:
                 x += idx
             self.matrix[x][y] = c
+        self.score.cache_clear()
+
+    def put_best(self, word):
+        word = word.lower()
+
+        candidate_positions = self.suggest_positions(word)
+
+        best_score = None
+        best_scrabble = None
+        for pos in candidate_positions:
+            s2 = copy.deepcopy(self)
+            s2.put(word, (pos[0], pos[1]), pos[2])
+            if s2.is_valid():
+                score = s2.score()
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_scrabble = s2
+
+        if best_scrabble is not None:
+            self.matrix = best_scrabble.matrix
+            self.score.cache_clear()
+        else:
+            return True
+
+    def put_best_many(self, words):
+        all_candidates : List[Scrabble] = [ self ]
+
+        # Put first word in the middle of scrabble
+        if len(self.get_words()) == 0 and len(words) > 0:
+            horizontal = copy.deepcopy(self)
+            horizontal.put(words[0], (math.floor(self.DIMENSION / 2), math.floor(self.DIMENSION / 2)), Direction.Right)
+            vertical = copy.deepcopy(self)
+            vertical.put(words[0], (math.floor(self.DIMENSION / 2), math.floor(self.DIMENSION / 2)), Direction.Down)
+            all_candidates = [ horizontal, vertical ]
+            words.pop(0)
+
+        # Add every word consecutively to the candidate Scrabbles
+        for word in words:
+            word = word.lower()
+            new_candidates = []
+            # For every candidate Scrabble, find all possible candidate
+            # sub-Scrabbles
+            for candidate in all_candidates:
+                positions = candidate.suggest_positions(word)
+                for pos in positions:
+                    c = copy.deepcopy(candidate)
+                    c.put(word, (pos[0], pos[1]), pos[2])
+                    if c.is_valid():
+                        new_candidates.append(c)
+            if len(new_candidates) > 0:
+                # No need to keep old Scrabbles, just store the latest good Scrabbles
+                all_candidates = new_candidates
+        # All possible Scrabbles calculated, now find the best one
+        best = max(all_candidates, key=lambda c: c.score())
+        self.matrix = best.matrix
+        self.score.cache_clear()
+
+
+
+    @lru_cache(maxsize=None)
+    def score(self):
+        return sum([ self._word_score(w) for w in self.get_words() ])
+
+    def _word_score(self, word, modifier=None):
+        word = word.lower()
+        score = 0
+        for idx, c in enumerate(word):
+            if idx >= 7:
+                # Large word limit
+                break
+
+            character_score = 0
+            if c in [ 'a', 'e', 'i', 'o', 'u', 'l', 'n', 's', 't', 'r' ]:
+                character_score = 1
+            elif c in [ 'd', 'g' ]:
+                character_score = 2
+            elif c in [ 'b', 'c', 'm', 'p' ]:
+                character_score = 3
+            elif c in [ 'f', 'h', 'v', 'w', 'y' ]:
+                character_score = 4
+            elif c in [ 'k' ]:
+                character_score = 5
+            elif c in [ 'j', 'x' ]:
+                character_score = 8
+            elif c in [ 'q', 'z' ]:
+                character_score = 10
+            else:
+                # Some number or symbol or emoji or something. These kinds of characters can be of very high quality, or not.
+                # Let's just forget they exist at all
+                character_score = 0
+            score += character_score
+        return score
 
     def is_valid(self):
         return all([uk_dictionary.check(word) or us_dictionary.check(word) for word in self.get_words()])
@@ -144,11 +230,23 @@ class Scrabble:
 if __name__ == "__main__":
     s = Scrabble()
 
-    s.put("bar", (2,2), Direction.Down)
-    s.put("baby", (2,2), Direction.Right)
+    # s.put("lite", (2,2), Direction.Down)
+    # s.put("baby", (2,2), Direction.Right)
+    # s.put("beard", (4,2), Direction.Down)
 
-    print(s)
+    s.put_best_many(["Use", "lite", "EnumAttr", "fault", "TFL_DimensionTypeAttr"])
 
-    print(s.get_words())
-    print(s.is_valid())
-    print(s.suggest_positions("bar"))
+
+    # for position in s.suggest_positions("daredevilitiness"):
+    #     print("SUGGESTED POSITION:")
+    #     s2 = copy.deepcopy(s)
+    #     s2.put("daredevilitiness", (position[0], position[1]), position[2])
+    #     print(s2)
+    #     print(s2.is_valid())
+
+    # print(s)
+
+    # print(s.get_words())
+    # print(s.is_valid())
+    # print(s.suggest_positions("baeeby"))
+    # print(s.suggest_positions("boy"))
