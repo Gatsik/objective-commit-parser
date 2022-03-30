@@ -4,6 +4,7 @@ import math
 from typing import List
 import enchant
 import numpy as np
+import re
 from functools import lru_cache
 
 class Direction(Enum):
@@ -48,7 +49,7 @@ class Scrabble:
                         candidate_positions.append((col, row - i, Direction.Down))
                 writeable = True
                 # Attempt to write horizontally
-                if i <= col and row + word_size - i < self.DIMENSION:
+                if i <= col and col + word_size - i < self.DIMENSION:
                     for j in range(1, i + 1):
                         char = self.matrix[col - j][row]
                         if (char is not None) and char != word[i - j]:
@@ -97,17 +98,37 @@ class Scrabble:
         else:
             return True
 
+    def put_first_word(self, word):
+        middle = math.floor(self.DIMENSION / 2)
+
+        hor = copy.deepcopy(self)
+        ver = copy.deepcopy(self)
+
+        if len(word) + middle >= self.DIMENSION:
+            start = self.DIMENSION - len(word)
+            if start < 0:
+                # fail
+                return False
+            hor.put(word, (start, middle), Direction.Right)
+            ver.put(word, (middle, start), Direction.Down)
+        else:
+            hor.put(word, (middle, middle), Direction.Right)
+            ver.put(word, (middle, middle), Direction.Down)
+
+        results = [ hor, ver ]
+        return [r for r in results if r.is_valid()]
+
+
     def put_best_many(self, words):
         all_candidates : List[Scrabble] = [ self ]
 
         # Put first word in the middle of scrabble
-        if len(self.get_words()) == 0 and len(words) > 0:
-            horizontal = copy.deepcopy(self)
-            horizontal.put(words[0], (math.floor(self.DIMENSION / 2), math.floor(self.DIMENSION / 2)), Direction.Right)
-            vertical = copy.deepcopy(self)
-            vertical.put(words[0], (math.floor(self.DIMENSION / 2), math.floor(self.DIMENSION / 2)), Direction.Down)
-            all_candidates = [ horizontal, vertical ]
+        while len(self.get_words()) == 0 and len(words) > 0:
+            init_scrabble = self.put_first_word(words[0])
             words.pop(0)
+            if init_scrabble is not False and len(init_scrabble) > 0:
+                all_candidates = init_scrabble
+                break
 
         # Add every word consecutively to the candidate Scrabbles
         for word in words:
@@ -215,6 +236,17 @@ class Scrabble:
         return words
 
 
+    def process_commit_message(message):
+         # First line of commit only
+        message = message.partition('\n')[0]
+        # First 80 git characters only
+        message = message[0:80]
+        words = re.findall(r"[A-Za-z]+", message)
+        # First 7 characters from each word... No overdoing it
+        words = [w[0:7] for w in words]
+
+        return words
+
 
     def __str__(self):
         str = ""
@@ -234,8 +266,8 @@ if __name__ == "__main__":
     # s.put("baby", (2,2), Direction.Right)
     # s.put("beard", (4,2), Direction.Down)
 
-    s.put_best_many(["Use", "lite", "EnumAttr", "fault", "TFL_DimensionTypeAttr"])
-
+    s.put_best_many(["establish", "lite", "EnumAttr", "fault", "TFL_DimensionTypeAttr"])
+    print(s)
 
     # for position in s.suggest_positions("daredevilitiness"):
     #     print("SUGGESTED POSITION:")
