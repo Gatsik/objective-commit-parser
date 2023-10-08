@@ -1,0 +1,12 @@
+coloredlogs
+GitPython
+matplotlib
+numpy
+pandas
+PyGithub
+PyYAML
+scipy
+seaborn
+tqdm
+whatthepatch
+xarray
